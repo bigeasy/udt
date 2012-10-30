@@ -22,7 +22,7 @@ var types = "Handshake Keep-alive Acknowledgement Negative-acknowledgement \
 
 var parser = packet.createParser();
 
-packets = require('./packets');
+packets = require('./common').packets;
 
 parser.packet('header', packets.header);
 parser.packet('handshake', packets.handshake);
@@ -35,9 +35,12 @@ client.on('message', function (buffer, $info) {
   log('Client', buffer, function () { server.send(buffer, 0, buffer.length, 9000, '127.0.0.1'); });
 });
 
+var epoch = process.hrtime();
 function log (participant, buffer, callback) {
   parser.reset();
   parser.extract('header', function (header) {
+    console.log(process.hrtime(epoch));
+    epoch = process.hrtime();
     if (header.control) {
       console.log(participant + ': Control ' + types[header.type], header);
       switch (header.type) {

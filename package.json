@@ -17,6 +17,6 @@
   { "proof": "0.0.15"
   }
 , "dependencies":
-  { "packet": "git://github.com/bigeasy/packet.git#6881dcfed57184a9744d1000cd3ca47f5cf127b5"
+  { "packet": "0.0.4"
   }
 }
