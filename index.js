@@ -55,25 +55,25 @@ var packets =
     b8( \
       &0x80/1:  \
         b16{b1 => control, b15 => type}, x16{0} \
-      , b32 => additional \
-      , b32 => timestamp \
-      , b32 => destination \
+      , -b32 => additional \
+      , -b32 => timestamp \
+      , -b32 => destination \
       | \
         b32{b1 => control, b31 => sequence} \
       , b32{b2 => position, b1 => inOrder, b29 => number} \
-      , b32 => timestamp \
-      , b32 => destination \
+      , -b32 => timestamp \
+      , -b32 => destination \
       ) \
     '
 , handshake: '\
-    b32 => version \
-  , b32 => socketType \
-  , b32 => sequence \
-  , b32 => maxPacketSize \
-  , b32 => windowSize \
+    -b32 => version \
+  , -b32 => socketType \
+  , -b32 => sequence \
+  , -b32 => maxPacketSize \
+  , -b32 => windowSize \
   , -b32 => connectionType \
-  , b32 => socketId \
-  , b32 => synCookie \
+  , -b32 => socketId \
+  , -b32 => synCookie \
   , b32 => address \
   , x96{0} \
   '
@@ -124,7 +124,7 @@ function recvHeader (header) {
       parser.extract('handshake', dialog[role](header));
       break;
     default:
-      die(header);
+      say(header);
     }
   }
 }
@@ -153,33 +153,32 @@ var dialog =
 , server: function (header) {
     return function (handshake) {
       handshake = extend(header, handshake);
-      say('handsake', extend({}, handshake));
-      if (count == 2) {
+      say(extend({}, handshake));
+      if (count == 1) {
         socket.close();
       } else {
-        serializer.buffer('handshake', handshake, function (buffer) {
     //      say(toArray(buffer));
     //      say(toArray(got));
-          count++;
-          var response =
-          { control: 1
-          , type: 0
-          , additional: 0
-          , timestamp: 0
-          , destination: handshake.destination
-          , version: 4
-          , socketType: 1
-          , sequence: 3
-          , maxPacketSize: 1500
-          , windowSize: 8192
-          , connectionType: -1
-          , socketId: 5
-          , synCookie: 9
-          , address: 16777343
-          };
-          serializer.buffer('handshake', response, function (buffer) {
-            socket.send(buffer, 0, buffer.length, 9000, '127.0.0.1');
-          });
+        count++;
+        var response =
+        { control: 1
+        , type: 0
+        , additional: 0
+        , timestamp: 0
+        , destination: handshake.destination
+        , version: 4
+        , socketType: 1
+        , sequence: 3
+        , maxPacketSize: 1500
+        , windowSize: 8192
+        , connectionType: -1
+        , socketId: handshake.destination
+        , synCookie: 9
+        , address: 16777343
+        };
+        say(extend({}, response));
+        serializer.buffer('handshake', response, function (buffer) {
+          socket.send(buffer, 0, buffer.length, 9000, '127.0.0.1');
         });
       }
     }
