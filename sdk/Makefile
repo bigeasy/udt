@@ -38,7 +38,7 @@ endif
 
 DIR = $(shell pwd)
 
-APP = server client
+APP = server client connect
 
 all: $(APP)
 
@@ -48,6 +48,8 @@ all: $(APP)
 server: server.o
 	$(C++) $^ -o $@ $(LDFLAGS)
 client: client.o
+	$(C++) $^ -o $@ $(LDFLAGS)
+connect: connect.o
 	$(C++) $^ -o $@ $(LDFLAGS)
 
 clean:
