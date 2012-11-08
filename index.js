@@ -4,11 +4,19 @@ var dgram = require('dgram')
   , common = require('./common')
   , crypto = require('crypto')
   , Heap = require('./heap').Heap
+  , dns = require('dns')
   , __slice = [].slice;
 
 const CONTROL_TYPES = 'handshake'.split(/\s+/);
 const MAX_MSG_NO = 0x1FFFFFFF;
 const MAX_SEQ_NO = Math.pow(2, 31) - 1;
+
+var socketId = crypto.randomBytes(4).readUInt32BE(0);
+
+function nextSocketId () {
+  if (socketId == 1) socketId = Math.pow(2, 32);
+  return --socketId;
+}
 
 var Stream = require('stream');
 var util = require('util');
@@ -89,6 +97,7 @@ function Socket (options) {
 
   Stream.call(this);
 
+  this._socketId = nextSocketId();
   this._ccc = options.ccc || new NativeControlAlgorithm;
   this._serializer = common.serializer.createSerializer();
   this._parser = common.parser.createParser();
@@ -103,14 +112,12 @@ exports.Socket = Socket;
 function exceptional () { return new Error(); }
 
 // Wrapper around an underlying UDP datagram socket.
-function EndPoint (options) {
-  this.references = 1;
+function EndPoint (local) {
+  this.listeners = 0;
   this.dgram = dgram.createSocket('udp4');
   this.dgram.on('message', EndPoint.prototype.receive.bind(this));
-  this.dgram.bind(options.localPort, options.localAddress);
-  var address = this.dgram.address();
-  this.localPort = address.port;
-  this.localAddress = options.localAddress;
+  this.dgram.bind(local.port, local.address);
+  this.local = this.dgram.address();
   this.packet = new Buffer(2048);
   this.sockets = {};
 }
@@ -136,83 +143,102 @@ EndPoint.prototype.shakeHands = function (socket) {
   , connectionType: 1
   , socketId: socket._socketId
   , synCookie: 0
-  , address: parseDotDecimal(socket._peer.host)
+  , address: parseDotDecimal(socket._peer.address)
   });
 }
-EndPoint.prototype.shutdown = function (socket) {
+EndPoint.prototype.shutdown = function (socket, send) {
   // Remove the socket from the stash.
   delete this.sockets[socket._socketId];
 
   // Zero the status.
   delete socket._status;
 
-  var serializer = common.serializer,
-      packet = this.packet, dgram = this.dgram,
-      count = 0, peer = socket._peer;
+  var endPoint = this, dgram = endPoint.dgram;
 
-  // Format a shutdown packet, simply a header packet of type shutdown.
-  serializer.reset();
-  serializer.serialize('header', 
-  { control: 1
-  , type: 0x5
-  , additional: 0
-  , timestamp: 0
-  , destination: peer.socketId
-  });
-  serializer.write(packet);
+  if (send) {
+    var serializer = common.serializer, packet = endPoint.packet, peer = socket._peer;
 
-  var callback = function () {};
+    // Format a shutdown packet, simply a header packet of type shutdown.
+    serializer.reset();
+    serializer.serialize('header', 
+    { control: 1
+    , type: 0x5
+    , additional: 0
+    , timestamp: 0
+    , destination: peer.socketId
+    });
+    serializer.write(packet);
 
-  // Dispose of the end point and UDP socket if it is no longer referenced.
-  if (--this.references == 0) {
-    var address = this.dgram.address();
-    delete endPoints[this.localPort][this.localAddress];
-    if (Object.keys(endPoints[this.localPort]).length == 0) {
-      delete endPoints[this.localPort];
-    }
-    callback = function () { dgram.close() };
+    dgram.send(packet, 0, serializer.length, peer.port, peer.address, finalize);
+  } else {
+    finalize();
   }
-
-  dgram.send(packet, 0, serializer.length, peer.port, peer.host, callback);
+  
+  function finalize () {
+    // If we were a bound listening socket, see if we ought to close.
+    if (socket._listener && !--endPoint.listeners && endPoint.server._closing) {
+      // This will unassign `endPoint.server`.
+      endPoint.server.close();
+    }
+    // Dispose of the end point and UDP socket if it is no longer referenced.
+    if (Object.keys(endPoint.sockets).length == 0) {
+      delete endPoints[endPoint.local.port][endPoint.local.address];
+      if (Object.keys(endPoints[endPoint.local.port]).length == 0) {
+        delete endPoints[endPoint.local.port];
+      }
+      dgram.close();
+    }
+  }
 }
 // Send the handshake four times a second until we get a response, or until four
 // seconds is up.
 EndPoint.prototype.sendHandshake = function (socket, handshake) {
-  var serializer = common.serializer,
-      packet = this.packet, dgram = this.dgram,
-      count = 0, peer = socket._peer;
+  var endPoint = this, count = 0, peer = socket._peer;
   socket._handshakeInterval = setInterval(function () {
     if (++count == 12) {
       clearInterval(socket._handshakeInterval);
       socket.emit('error', new Error('connection timeout'));
     } else {
-      serializer.reset();
-      serializer.serialize('handshake', handshake);
-      serializer.write(packet);
-
-      dgram.send(packet, 0, serializer.length, peer.port, peer.host);
+      endPoint.send('handshake', handshake, socket._peer);
     }
   }, 250);
+}
+EndPoint.prototype.send = function (packetType, object, peer) {
+  var serializer = common.serializer,
+      packet = this.packet,
+      dgram = this.dgram;
+  
+  serializer.reset();
+  serializer.serialize(packetType, object);
+  serializer.write(packet);
+
+  dgram.send(packet, 0, serializer.length, peer.port, peer.address);
 }
 EndPoint.prototype.receive = function (msg, rinfo) {
   var endPoint = this, parser = common.parser, handler;
   parser.extract('header', function (header) {
     if (header.control) {
-      // TODO: Socket not found...
-      var socket = endPoint.sockets[header.destination];
-      switch (header.type) {
-      case 0x1:
+      if (header.destination) {
+        // TODO: Socket not found...
+        var socket = endPoint.sockets[header.destination];
+        switch (header.type) {
         // Keep-alive.
-        break;
-      case 0x5:
+        case 0x1:
+          break;
         // Shutdown.
-        break;
-      case 0x6:
+        case 0x5:
+          endPoint.shutdown(socket, false);
+          break;
         // Notifications from Bill the Cat. (Ack-ack.)
-        break;
-      default:
-        var name = CONTROL_TYPES[header.type];
-        parser.extract(name, endPoint[name].bind(endPoint, socket, header))
+        case 0x6:
+          break;
+        default:
+          var name = CONTROL_TYPES[header.type];
+          parser.extract(name, endPoint[name].bind(endPoint, socket, header))
+        }
+      // Hmm... Do you explicitly enable rendezvous?
+      } else if (header.type == 0 && endPoint.server) {
+        parser.extract('handshake', endPoint.connect.bind(endPoint, rinfo, header))
       }
     } else {
     }
@@ -221,13 +247,13 @@ EndPoint.prototype.receive = function (msg, rinfo) {
 }
 EndPoint.prototype.handshake = function (socket, header, handshake) {
   switch (socket._status) {
-  case "syn":
+  case 'syn':
     // Only respond to an initial handshake.
     if (handshake.connectionType != 1) break;
 
     clearInterval(socket._handshakeInterval);
 
-    socket._status = "syn-ack";
+    socket._status = 'syn-ack';
 
     // Unify the packet object for serialization.
     handshake = extend(handshake, header);
@@ -243,17 +269,55 @@ EndPoint.prototype.handshake = function (socket, header, handshake) {
 
     this.sendHandshake(socket, handshake);
     break;
-  case "syn-ack":
+  case 'syn-ack':
     // Only respond to an follow-up handshake.
     if (handshake.connectionType != -1) break;
 
     clearInterval(socket._handshakeInterval);
 
-    socket._status = "connected";
+    socket._status = 'connected';
     socket._peer.socketId = handshake.socketId;
 
     socket.emit('connect');
     break;
+  }
+}
+EndPoint.prototype.connect = function (rinfo, header, handshake) {
+  var endPoint = this, server = endPoint.server, timestamp = Math.floor(Date.now() / 6e4);
+
+  handshake = extend(handshake, header);
+
+  if (handshake.connectionType == 1) {
+    handshake.destination = handshake.socketId;
+    handshake.synCookie = synCookie(rinfo, timestamp);
+    endPoint.send('handshake', handshake, rinfo);
+  } else if (handshakeWithValidCookie(handshake, timestamp)) {
+    // Create the socket and initialize it as a listener.
+    var socket = new Socket;
+
+    socket._peer = rinfo;
+    socket._endPoint = endPoint;
+    socket._listener = true;
+    socket._status = 'connected';
+
+    // Increase the count of end point listeners.
+    endPoint.listeners++;
+
+    endPoint.sockets[socket._socketId] = socket;
+
+    handshake.destination = handshake.socketId; 
+    handshake.socketId = socket._socketId; 
+
+    endPoint.send('handshake', handshake, rinfo);
+
+    endPoint.server.emit('connection', socket);
+  }
+
+  function handshakeWithValidCookie (handshake, timestamp) {
+    if (handshake.connectionType != -1) return false;
+    if (synCookie(rinfo, timestamp) == handshake.synCookie) return true;
+    if (synCookie(rinfo, timestamp - 1) == handshake.synCookie) return true;
+    return false; 
   }
 }
 
@@ -262,34 +326,34 @@ var endPoints = {};
 
 // Create a new UDP datagram socket from the user specified port and address.
 
-// 
-function createEndPoint (options) {
-  var endPoint = new EndPoint(options), address = endPoint.dgram.address();
-  if (!endPoints[endPoint.localPort]) endPoints[endPoint.localPort] = {};
-  return endPoints[endPoint.localPort][endPoint.localAddress] = endPoint;
+// TODO: IP version.
+function createEndPoint (local) {
+  var endPoint = new EndPoint(local), local = endPoint.local;
+  if (!endPoints[local.port]) endPoints[local.port] = {};
+  return endPoints[local.port][local.address] = endPoint;
 }
 
 // Look up an UDP datagram socket in the cache of bound UDP datagram sockets by
 // the user specified port and address. 
 
 // 
-function lookupEndPoint (options) {
+function lookupEndPoint (local) {
   // No interfaces bound by the desired port. Note that this would also work for
   // zero, which indicates an ephemeral binding, but we check for that case
   // explicitly before calling this function.
-  if (!endPoints[options.localPort]) return null;
+  if (!endPoints[local.port]) return null;
 
   // Read datagram socket from cache.
-  var endPoint = endPoints[options.localPort][options.localAddress];
+  var endPoint = endPoints[local.port][local.address];
 
   // If no datagram exists, ensure that we'll be able to create one. This only
   // inspects ports that have been bound by UDT, not by other protocols, so
   // there is still an opportuntity for error when the UDP bind is invoked.
   if (!endPoint) {
-    if (endPoints[options.localPort][0]) {
+    if (endPoints[local.port][0]) {
       throw new Error('Already bound to all interfaces.');
     }
-    if (options.localAddress == 0) {
+    if (local.address == 0) {
       throw new Error('Cannot bind to all interfaces because some interfaces are already bound.');
     }
   }
@@ -330,54 +394,57 @@ Socket.prototype.connect = function (options) {
 
   if (socket._dgram) throw new Error('Already connected');
 
-  socket._options = options = extend({}, options);
+  var peer = { address: options.host, port: options.port };
+  var local = { address: options.localAddress, port: options.localPort };
 
   if (options.path) throw new Error('UNIX domain sockets are not supported.');
   if (!options.port) throw new Error('Remote port is required.');
 
   // Assign reasonable defaults for unspecified connection properties.
-  if (!options.host) options.host = '127.0.0.1';
-  if (!options.localAddress) options.localAddress = 0;
-  if (!options.localPort) options.localPort = 0;
-
-  // Convert local address to a 32 bit integer.
-  if (typeof options.localAddress == 'string') {
-    options.localAddress = parseDotDecimal(options.localAddress);
-  }
-
-  // Use an existing datagram socket if one exists.
-  if (options.localPort == 0) {
-    socket._endPoint = createEndPoint(options);
-  } else if (!(socket._endPoint = lookupEndPoint(options))) {
-    socket._endPoint = createEndPoint(options);
-  }
+  if (!peer.address) peer.address = '127.0.0.1';
+  if (!local.address) local.address = '0.0.0.0';
+  if (!local.port) local.port = 0;
 
   socket._connecting = true;
 
   var valid = validator(socket);
 
-  require('dns').lookup(options.host, valid(resolved));
+  // Resolve DNS now to use the ip as cache key. Lookup handles a interprets
+  // local address as 0.0.0.0.
+  dns.lookup(local.address, valid(localResolved));
+
+  function localResolved (ip, addressType) {
+    local.address = ip;
+
+    // Use an existing datagram socket if one exists.
+    if (local.port == 0) {
+      socket._endPoint = createEndPoint(local);
+    } else if (!(socket._endPoint = lookupEndPoint(local))) {
+      socket._endPoint = createEndPoint(local);
+    }
+
+    dns.lookup(options.address, valid(peerResolved));
+  }
 
   // Record the DNS resolved IP address.
-  function resolved (ip, addressType) {
+  function peerResolved (ip, addressType) {
     // Possible cancelation during DNS lookup.
     if (!socket._connecting) return;
 
-    socket._peer = { host: ip || '127.0.0.1', port: options.port };
+    socket._peer = { address: ip || '127.0.0.1', port: options.port };
 
     // Generate random bytes used to set randomized socket properties.
     // `crypto.randomBytes` calls OpenSSL `RAND_bytes` to generate the bytes.
     //
     //  * [RAND_bytes](http://www.openssl.org/docs/crypto/RAND_bytes.html).
     //  * [node_crypto.cc](https://github.com/joyent/node/blob/v0.8/src/node_crypto.cc#L4517)
-    crypto.randomBytes(8, valid(randomzied));
+    crypto.randomBytes(4, valid(randomzied));
   }
 
   // Initialize the randomized socket properies.
   function randomzied (buffer) {
     // Randomly generated randomness.
     socket._sequence = buffer.readUInt32BE(0) % MAX_SEQ_NO;
-    socket._socketId = buffer.readUInt32BE(4);
 
     // The end point sends a packet on our behalf.
     socket._endPoint.shakeHands(socket);
@@ -387,6 +454,103 @@ Socket.prototype.destroy = function () {
   this._endPoint.shutdown(this);
 }
 Socket.prototype._destroy = Socket.prototype.destroy;
+
+function Server () {
+  if (!(this instanceof Server)) return new Server(arguments[0], arguments[1]);
+
+  events.EventEmitter.call(this);
+
+  var server = this;
+
+  var options;
+
+  if (typeof arguments[0] == 'function') {
+    options = {};
+    server.on('connection', arguments[0]);
+  } else {
+    options = arguments[0] || {};
+    if (typeof arguments[1] == 'function') {
+      server.on('connection', arguments[1]);
+    }
+  }
+
+  // The Node.js `net` module uses a property for connections because the
+  // connections property is disabled if the server is running in a
+  // multi-process model, if it has "slaves." UDT does not support multi-process
+  // model, so connections is plain-old property.
+
+  //
+  this.connections = 0;
+}
+util.inherits(Server, events.EventEmitter);
+exports.Server = Server;
+
+// TODO: Consolidate.
+function selectEndPoint (local) {
+  var endPoint;
+  // Use an existing datagram socket if one exists.
+  if (local.port == 0) {
+    endPoint = createEndPoint(local);
+  } else if (!(endPoint = lookupEndPoint(local))) {
+    endPoint = createEndPoint(local);
+  }
+  return endPoint;
+}
+
+Server.prototype.listen = function () {
+  var server = this;
+
+  var lastArg = arguments[arguments.length - 1];
+  if (typeof lastArg == 'function') {
+    server.once('listening', lastArg);
+  }
+
+  var valid = validator(server);
+
+  var options = { port: arguments[0] || 0 };
+  dns.lookup(arguments[1], valid(resolved));
+
+  function resolved (ip, addressType) {
+    options.address = ip || '0.0.0.0';
+
+    var endPoint = server._endPoint = selectEndPoint(options);
+
+    if (endPoint.server) {
+      throw new Error('already bound to UDT server');
+    }
+
+    endPoint.server = server;
+    console.log(endPoint.local);
+
+    process.nextTick(function () {
+      server.emit('listening');
+    });
+  }
+}
+
+Server.prototype.close = function (callback) {
+  var server = this, endPoint = server._endPoint;
+
+  if (callback) server.once('close', callback);
+
+  server._closing = true;
+
+  if (endPoint.listeners == 0) {
+    endPoint._server = null; 
+    server.emit('close');
+  }
+}
+
+const SYN_COOKIE_SALT = crypto.randomBytes(64).toString('binary');
+function synCookie (address, timestamp) {
+  var hash = crypto.createHash('sha1');
+  hash.update(SYN_COOKIE_SALT + ':' + address.host + ':' + address.port + ':' + timestamp);
+  return parseInt(hash.digest('hex').substring(0, 8), 16);
+}
+
+exports.createServer = function () {
+  return new Server(arguments[0], arguments[1]);
+}
 
 function toArray (buffer) {
   return buffer.toString('hex').replace(/(..)/g, ':$1').replace(/(.{12})/g, '\n$1').replace(/\n:/g, '\n');
