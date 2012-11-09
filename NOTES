@@ -1,0 +1,5 @@
+Things that I'm running on occasion.
+
+(cd sdk && make -e os=OSX sdk=~/src/udt4/src)
+DYLD_LIBRARY_PATH=~/src/udt4/src sdk/server
+DYLD_LIBRARY_PATH=~/src/udt4/src sdk/client 127.0.0.1 9293 index.js
