@@ -285,6 +285,9 @@ EndPoint.prototype.handshake = function (socket, header, handshake) {
 EndPoint.prototype.connect = function (rinfo, header, handshake) {
   var endPoint = this, server = endPoint.server, timestamp = Math.floor(Date.now() / 6e4);
 
+  // Do not accept new connections if the server is closing.
+  if (server._closing) return;
+
   handshake = extend(handshake, header);
 
   if (handshake.connectionType == 1) {
@@ -392,6 +395,7 @@ Socket.prototype.connect = function (options) {
 
   var socket = this;
 
+  // TODO: _endPoint.
   if (socket._dgram) throw new Error('Already connected');
 
   var peer = { address: options.host, port: options.port };
@@ -404,6 +408,10 @@ Socket.prototype.connect = function (options) {
   if (!peer.address) peer.address = '127.0.0.1';
   if (!local.address) local.address = '0.0.0.0';
   if (!local.port) local.port = 0;
+
+  if (typeof arguments[1] == 'function') {
+    socket.on('connect', arguments[1]);
+  }
 
   socket._connecting = true;
 
