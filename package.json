@@ -12,7 +12,7 @@
   { "type": "git"
   , "url": "http://github.com/bigeasy/udt.git"
   }
-, "scripts" : { "test": "proof t/*/*.t" }
+, "scripts" : { "test": "proof t/*/*.t.js" }
 , "devDependencies":
   { "proof": "0.0.15"
   }
