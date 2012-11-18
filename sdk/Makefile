@@ -38,22 +38,26 @@ endif
 
 DIR = $(shell pwd)
 
-APP = server client connect
+APP = file/client file/server connect/client integer/client integer/server
 
 all: $(APP)
 
 %.o: %.cpp
-	$(C++) $(CCFLAGS) $< -c
+	$(C++) $(CCFLAGS) $< -c -o $@
 
-server: server.o
+file/server: file/server.o
 	$(C++) $^ -o $@ $(LDFLAGS)
-client: client.o
+file/client: file/client.o
 	$(C++) $^ -o $@ $(LDFLAGS)
-connect: connect.o
+connect/client: connect/client.o
+	$(C++) $^ -o $@ $(LDFLAGS)
+integer/server: integer/server.o
+	$(C++) $^ -o $@ $(LDFLAGS)
+integer/client: integer/client.o
 	$(C++) $^ -o $@ $(LDFLAGS)
 
 clean:
-	rm -f *.o $(APP)
+	rm -f */*.o $(APP)
 
 install:
 	export PATH=$(DIR):$$PATH

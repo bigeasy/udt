@@ -48,6 +48,16 @@ int main(int argc, char* argv[])
 
    freeaddrinfo(peer);
 
+   int32_t size = 4;
+
+   cout << "file size: " << size << endl;
+
+   // send file size information
+   if (UDT::ERROR == UDT::send(fhandle, (char*)&size, sizeof(int32_t), 0))
+   {
+      cout << "send: " << UDT::getlasterror().getErrorMessage() << endl;
+      return -1;
+   }
 
    UDT::close(fhandle);
 

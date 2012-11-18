@@ -18,7 +18,7 @@ var packets = exports.packets =
 , handshake: '\
     -b32 => version \
   , -b32 => socketType \
-  , -b32 => sequence \
+  , b32 => sequence \
   , -b32 => maxPacketSize \
   , -b32 => windowSize \
   , -b32 => connectionType \
@@ -26,6 +26,9 @@ var packets = exports.packets =
   , b32 => synCookie \
   , b32 => address \
   , x96{0} \
+  '
+, acknowledgement: '\
+    b32 => sequence  \
   '
 }
 
