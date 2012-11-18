@@ -39,7 +39,6 @@ var epoch = process.hrtime();
 function log (participant, buffer, callback) {
   parser.reset();
   parser.extract('header', function (header) {
-    console.log(process.hrtime(epoch));
     epoch = process.hrtime();
     if (header.control) {
       console.log(participant + ': Control ' + types[header.type], header);
@@ -58,7 +57,6 @@ function log (participant, buffer, callback) {
       console.log(participant + ': Data');
       console.log(extend(header, { parser: parser.length, buffer: buffer.length }));
       if (participant == 'Client' && buffer.length - parser.length == 4) {
-        console.log("CLIENT %d", buffer.readInt32LE(parser.length));
         callback();
       } else {
 //      console.log(toArray(buffer));
