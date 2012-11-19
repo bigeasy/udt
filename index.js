@@ -343,7 +343,7 @@ EndPoint.prototype.receive = function (msg, rinfo) {
         }
       // Hmm... Do you explicitly enable rendezvous?
       } else if (header.type == 0 && endPoint.server) {
-        parser.extract('handshake', endPoint.connect.bind(endPoint, rinfo, header, msg.length))
+        parser.extract('handshake', endPoint.connect.bind(endPoint, rinfo, header))
       }
     } else {
     }
