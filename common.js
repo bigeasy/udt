@@ -30,6 +30,13 @@ var packets = exports.packets =
 , acknowledgement: '\
     b32 => sequence  \
   '
+, statistics: '\
+    b32 => rtt \
+  , b32 => rttVariance \
+  , b32 => availableBufferSize \
+  , b32 => receivingRate \
+  , b32 => linkCapacity \
+  '
 }
 
 var parser = exports.parser = packet.createParser();

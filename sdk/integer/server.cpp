@@ -19,14 +19,16 @@ void* server(void*);
 DWORD WINAPI server(LPVOID);
 #endif
 
+static int sleepy = 0;
+
 int main(int argc, char* argv[])
 {
-   //usage: sendfile [server_port]
-   if ((2 < argc) || ((2 == argc) && (0 == atoi(argv[1]))))
+   sleepy = argc > 1;
+/*   if ((2 < argc) || ((2 == argc) && (0 == atoi(argv[1]))))
    {
       cout << "usage: sendfile [server_port]" << endl;
       return 0;
-   }
+   }*/
 
    // use this function to initialize the UDT library
    UDT::startup();
@@ -40,8 +42,6 @@ int main(int argc, char* argv[])
    hints.ai_socktype = SOCK_STREAM;
 
    string service("9000");
-   if (2 == argc)
-      service = argv[1];
 
    if (0 != getaddrinfo(NULL, service.c_str(), &hints, &res))
    {
@@ -124,6 +124,8 @@ DWORD WINAPI server(LPVOID usocket)
    }
 
    cout << "number: " << size << endl;
+
+   if (sleepy) sleep(5);
 
    UDT::close(fhandle);
 
