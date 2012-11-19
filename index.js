@@ -205,9 +205,11 @@ function Socket (options) {
 
   this._socketId = nextSocketId();
   this._messageNumber = 1;
+  this._flowWindowSize = 0;
   this._ccc = options.ccc || new NativeControlAlgorithm;
   this._packet = new Buffer(1500);
   this._pending = [];
+  this._sent = [];
 }
 util.inherits(Socket, Stream);
 
@@ -249,6 +251,21 @@ EndPoint.prototype.shakeHands = function (socket) {
   , synCookie: 0
   , address: parseDotDecimal(socket._peer.address)
   });
+}
+EndPoint.prototype.control = function (socket, pattern, message, callback) {
+  var serializer = common.serializer, dgram = this.dgram, packet = new Buffer(64), peer = socket._peer;
+
+  message.control = 1;
+  message.destination = peer.socketId;
+  // TODO: Implement timestamp.
+  message.timestamp = 0;
+
+  // Format a shutdown packet, simply a header packet of type shutdown.
+  serializer.reset();
+  serializer.serialize(pattern, message);
+  serializer.write(packet);
+
+  dgram.send(packet, 0, serializer.length, peer.port, peer.address, callback);
 }
 EndPoint.prototype.shutdown = function (socket, send) {
   // Remove the socket from the stash.
@@ -320,7 +337,10 @@ EndPoint.prototype.send = function (packetType, object, peer) {
 }
 EndPoint.prototype.receive = function (msg, rinfo) {
   var endPoint = this, parser = common.parser, handler;
+  parser.reset();
   parser.extract('header', function (header) {
+    header.rinfo = rinfo;
+    header.length = msg.length;
     if (header.control) {
       if (header.destination) {
         // TODO: Socket not found...
@@ -339,7 +359,7 @@ EndPoint.prototype.receive = function (msg, rinfo) {
         default:
           var name = CONTROL_TYPES[header.type];
           console.log(header);
-          parser.extract(name, endPoint[name].bind(endPoint, socket, header))
+          parser.extract(name, endPoint[name].bind(endPoint, parser, socket, header))
         }
       // Hmm... Do you explicitly enable rendezvous?
       } else if (header.type == 0 && endPoint.server) {
@@ -350,7 +370,7 @@ EndPoint.prototype.receive = function (msg, rinfo) {
   });
   parser.parse(msg);
 }
-EndPoint.prototype.handshake = function (socket, header, handshake) {
+EndPoint.prototype.handshake = function (parser, socket, header, handshake) {
   switch (socket._status) {
   case 'syn':
     // Only respond to an initial handshake.
@@ -388,9 +408,46 @@ EndPoint.prototype.handshake = function (socket, header, handshake) {
     break;
   }
 }
-EndPoint.prototype.acknowledgement = function (socket, header, ack, length) {
-  say(ack);
+
+// Binary search, implemented, as always, by taking a [peek at
+// Sedgewick](http://algs4.cs.princeton.edu/11model/BinarySearch.java.html).
+function binarySearch (comparator, array, key) {
+  var low = 0, high = array.length - 1, partition, compare;
+  while (low <= high) {
+    partition = Math.floor(low + (high - low) / 2);
+    compare = comparator(key, array[partition]);
+    if (compare < 0) high = partition - 1;
+    else if (compare > 0) low = partition + 1;
+    else return partition;
+  }
+  return low;
+}
+
+// Compare two objects by their sequence property.
+function bySequence (left, right) { return left.sequence - right.sequence }
+
+EndPoint.prototype.acknowledgement = function (parser, socket, header, ack) {
+  // All parsing in one fell swoop so we don't do something that causes a next
+  // tick which might cause the parser to be reused.
+  if (header.length == 40) {
+    parser.extract('statistics', this.fullAcknowledgement.bind(this, socket, header, ack));
+  } else {
+    this.lightAcknowledgement(socket, header, ack);
+  }
 };
+
+// Remove the sent packets that have been received.
+EndPoint.prototype.fullAcknowledgement = function (socket, header, ack, stats) {
+  this.lightAcknowledgement(socket, header, ack);
+  say(socket._flowWindowSize, socket._sent.length, header, ack, stats);
+}
+
+EndPoint.prototype.lightAcknowledgement = function (socket, header, ack) {
+  var endPoint = this, sent = socket._sent, index = binarySearch(bySequence, sent, ack);
+  socket._flowWindowSize -= sent.splice(0, index).length;
+  endPoint.control(socket, 'header', { type: 0x6, additional: header.additional });
+}
+
 EndPoint.prototype.connect = function (rinfo, header, handshake) {
   var endPoint = this, server = endPoint.server, timestamp = Math.floor(Date.now() / 6e4);
 
@@ -455,11 +512,13 @@ EndPoint.prototype.transmit = function (socket) {
 
   if (message) {
     serializer.reset();
-    say(message);
     serializer.serialize('header', extend({ control: 0, timestamp: 0 }, message));
     serializer.write(message.buffer);
 
     dgram.send(message.buffer, 0, message.buffer.length, peer.port, peer.address);
+
+    socket._flowWindowSize++;
+    socket._sent.push(message);
   }
 
   // TODO: Something like this, but after actually calculating the time of the
