@@ -209,7 +209,7 @@ function Socket (options) {
   this._ccc = options.ccc || new NativeControlAlgorithm;
   this._packet = new Buffer(1500);
   this._pending = [];
-  this._sent = [];
+  this._sent = [[]];
 }
 util.inherits(Socket, Stream);
 
@@ -358,7 +358,7 @@ EndPoint.prototype.receive = function (msg, rinfo) {
           break;
         default:
           var name = CONTROL_TYPES[header.type];
-          console.log(header);
+          console.log(name, header);
           parser.extract(name, endPoint[name].bind(endPoint, parser, socket, header))
         }
       // Hmm... Do you explicitly enable rendezvous?
@@ -439,12 +439,21 @@ EndPoint.prototype.acknowledgement = function (parser, socket, header, ack) {
 // Remove the sent packets that have been received.
 EndPoint.prototype.fullAcknowledgement = function (socket, header, ack, stats) {
   this.lightAcknowledgement(socket, header, ack);
-  say(socket._flowWindowSize, socket._sent.length, header, ack, stats);
+  say(socket._flowWindowSize, socket._sent[0].length, header, ack, stats);
 }
 
 EndPoint.prototype.lightAcknowledgement = function (socket, header, ack) {
-  var endPoint = this, sent = socket._sent, index = binarySearch(bySequence, sent, ack);
-  socket._flowWindowSize -= sent.splice(0, index).length;
+  var endPoint = this, sent = socket._sent, sequence = sent[0], index;
+  index = binarySearch(bySequence, sequence, ack);
+  if (index != -1 && sent.length == 2) {
+    socket._flowWindowSize -= sent[1].length;
+    sent.length = 1;
+  }
+  if (sent.length == 2) {
+    sequence = sent[1];
+    index = binarySearch(bySequence, sequence, ack);
+  }
+  socket._flowWindowSize -= sequence.splice(0, index).length;
   endPoint.control(socket, 'header', { type: 0x6, additional: header.additional });
 }
 
@@ -490,7 +499,8 @@ EndPoint.prototype.connect = function (rinfo, header, handshake) {
   }
 }
 EndPoint.prototype.transmit = function (socket) {
-  var serializer = common.serializer, dgram = this.dgram, pending = socket._pending, peer = socket._peer;
+  var serializer = common.serializer, dgram = this.dgram,
+      pending = socket._pending, peer = socket._peer, enqueue;
 
   // If we have data packets to retransmit, they go first, otherwise send a new
   // data packet.
@@ -505,8 +515,11 @@ EndPoint.prototype.transmit = function (socket) {
       // TODO: Is pop faster?
       message = pending[0].shift();
 
-      // TODO: Wrap sequence number. See issue #24.
-      message.sequence = socket._sequence++;
+      // Set the sequence number.
+      message.sequence = socket._sequence;
+
+      // We will stash the message and increment the seqeunce number.
+      enqueue = true;
     }
   }
 
@@ -516,9 +529,20 @@ EndPoint.prototype.transmit = function (socket) {
     serializer.write(message.buffer);
 
     dgram.send(message.buffer, 0, message.buffer.length, peer.port, peer.address);
+  }
 
+  if (enqueue) {
     socket._flowWindowSize++;
-    socket._sent.push(message);
+    // Advance to the socket's next sequence number. The manipulation of the
+    // sent list occurs in both the `Socket` and the `EndPoint`.
+    socket._sequence = socket._sequence + 1 & MAX_SEQ_NO;
+    // When our sequence number wraps, we use a new array of sent packets. This
+    // helps us handle acknowledgements of packets whose squence number is in
+    // the vicinity of a wrap.
+    if (socket._sequence == 0) {
+      socket._sent.unshift([]);
+    }
+    socket._sent[0].push(message);
   }
 
   // TODO: Something like this, but after actually calculating the time of the
@@ -587,6 +611,15 @@ function check (ee, forward) {
         ee.emit('error', error);
       }
     }
+  }
+}
+
+Socket.prototype._nextSequence = function () {
+  var socket = this;
+  if (socket._sequence == MAX_SEQ_NO) {
+    return socket._sequence = 0;
+  } else {
+    return ++socket._sequence;
   }
 }
 
