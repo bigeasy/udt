@@ -1,7 +1,5 @@
 node_modules/*
-sdk/client
-sdk/client.o
-sdk/connect
-sdk/connect.o
-sdk/server
-sdk/server.o
+build/*
+sdk/*/*.o
+sdk/*/client
+sdk/*/server

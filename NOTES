@@ -1,5 +1,6 @@
 Things that I'm running on occasion.
 
-(cd sdk && make -e os=OSX sdk=~/src/udt4/src)
-DYLD_LIBRARY_PATH=~/src/udt4/src sdk/server
-DYLD_LIBRARY_PATH=~/src/udt4/src sdk/client 127.0.0.1 9293 index.js
+DYLD_LIBRARY_PATH=~/src/udt4/src sdk/file/server
+DYLD_LIBRARY_PATH=~/src/udt4/src sdk/file/client 127.0.0.1 9293 index.js
+
+(node --debug-brk client.js &); node-inspector

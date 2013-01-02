@@ -3,13 +3,13 @@ var dgram = require('dgram')
   , packet = require('packet')
   , common = require('./common')
   , crypto = require('crypto')
-  , Heap = require('./heap').Heap
   , dns = require('dns')
   , __slice = [].slice;
 
-const CONTROL_TYPES = 'handshake'.split(/\s+/);
+const CONTROL_TYPES = 'handshake keep-alive acknowledgement'.split(/\s+/);
 const MAX_MSG_NO = 0x1FFFFFFF;
 const MAX_SEQ_NO = Math.pow(2, 31) - 1;
+const IMMEDIATE = [ 0, 0 ];
 
 var socketId = crypto.randomBytes(4).readUInt32BE(0);
 
@@ -26,11 +26,103 @@ var net = require('net');
 // The start of time used in our high resolution timings.
 var epoch = process.hrtime();
 
-// Comparison operator for high-resolution time for use with heap.
-function before (a, b) {
-  if (a.when[0] < b.when[0]) return true;
-  if (a.when[0] > b.when[0]) return false;
-  return a.when[1] < b.when[1];
+var heapIndexKeyCounter = 0;
+
+function Heap (before) {
+  this.array = [];
+  this.indexKey = '_Heap_index_key_' + (heapIndexKeyCounter++);
+  this.before = before;
+}
+
+Heap.prototype.__defineGetter__("length", function () {
+  return this.array.length;
+});
+
+Heap.prototype.peek = function () {
+  return this.array[0];
+}
+
+Heap.prototype.bubbleUp = function (index) {
+  var before = this.before, array = this.array, indexKey = this.indexKey, node = array[index]; 
+  while (index > 0) {
+    var parent = index - 1 >> 1;
+    if (before(node, array[parent])) {
+      array[index] = array[parent];
+      array[parent] = node;
+      array[index][indexKey] = index;
+      array[parent][indexKey] = parent;
+      index = parent;
+    } else {
+      break;
+    }
+  }
+}
+
+Heap.prototype.sinkDown = function (index) {
+  var array = this.array, indexKey = this.indexKey,
+      length = array.length, node = array[index],
+      left, right, child;
+  for (left = index * 2 + 1; left < length; l = index * 2 + 1) {
+    child = left;
+    right = left + 1;
+    if (right < length && before(array[right], array[left])) {
+      child = right;
+    }
+    if (before(array[child][indexKey], node[indexKey])) {
+      array[index] = array[child];
+      array[child] = node;
+      array[index][indexKey] = index;
+      array[child][indexKey] = child;
+      index = child;
+    } else {
+      break;
+    }
+  }
+}
+
+Heap.prototype.remove = function (node) {
+  var array = this.array, indexKey = this.indexKey, last = array.pop(), index = node[indexKey];
+  if (index != array.length) {
+    array[index] = last;
+    if (less(end, node)) {
+      this.bubbleUp(index);
+    } else {
+      this.sinkDown(index);
+    }
+  }
+  delete node[indexKey];
+}
+
+Heap.prototype.push = function (node, value) {
+  var array = this.array, indexKey = this.indexKey, index = array.length;
+  if (node[indexKey] != null) {
+    this.remove(node);
+    this.push(node);
+  } else {
+    array.push(node);
+    node[indexKey] = index;
+    this.bubbleUp(index);
+  }
+}
+
+Heap.prototype.pop = function (node) {
+  var array = this.array, indexKey = this.indexKey, result = array[0], last = array.pop();
+  if (array.length) {
+    array[0] = last;
+    last[indexKey] = 0; 
+    this.sinkDown(0);
+  }
+  delete result[indexKey];
+  return result;
+}
+
+// Comparison operator generator for high-resolution time for use with heap.
+function sooner (property) {
+  return function (a, b) {
+    if (a[property][0] < b[property][0]) return true;
+    if (a[property][0] > b[property][0]) return false;
+    return a[property][1] < b[property][1];
+  }
 }
 
 function die () {
@@ -66,28 +158,42 @@ function NativeControlAlgorithm () {
 util.inherits(NativeControlAlgorithm, events.EventEmitter);
 
 var sendQueue = new (function () {
-  var queue = new Heap(before), sending = false;
+  var before = sooner('_sendTime'), queue = new Heap(before), sending = false;
   function enqueue (socket, packet, when) {
     queue.add({ socket: socket, packet: packet, when: when });
     if (!sending) poll();
   }
+  function schedule (socket, timestamp) {
+    // This gave me a funny feeling, one of violating encapsulation by using a
+    // property in the socket object from the send queue, except that am I
+    // supposed to do? This is what I would have called violating encapsulation
+    // in my Java days, it triggers the creation of a dozen new types to
+    // preserve encapsulation. I've yet to completely de-program myself of this
+    // sort of rote programming. The send queue is within the same capsule as
+    // the socket. They are interdependent. They existing for each other. The
+    // socket object's underscorred proroperties are part of its implementation,
+    // in fact, the socket is not the implementation, the whole API is.
+    socket._sendTime = timestamp;
+    queue.push(socket);
+    if (!sending) poll();
+  }
   function poll () {
     sending = true;
-    if (queue.empty()) {
+    if (! queue.length) {
       sending = false;
     } else {
       send();
     }
   }
   function send () {
-    var now = process.hrtime();
-    if (before(queue.buf[0], { when: now })) {
-      var entry = queue.pop(), socket = entry.socket, endPoint = socket._endPoint;
-      endPoint.send(socket, packet);
-      process.nextTick(poll);
+    var socket;
+    if (before(queue.peek(), { _sendTime: process.hrtime() })) {
+      socket = queue.pop();
+      socket._endPoint.transmit(socket);
     }
+    process.nextTick(poll);
   }
-  extend(this, { enqueue: enqueue });
+  extend(this, { schedule: schedule });
 })();
 
 function Socket (options) {
@@ -98,12 +204,12 @@ function Socket (options) {
   Stream.call(this);
 
   this._socketId = nextSocketId();
+  this._messageNumber = 1;
+  this._flowWindowSize = 0;
   this._ccc = options.ccc || new NativeControlAlgorithm;
-  this._serializer = common.serializer.createSerializer();
-  this._parser = common.parser.createParser();
   this._packet = new Buffer(1500);
-  this._sendQueue = new Heap;
-  this._receiveQueue = new Heap;
+  this._pending = [];
+  this._sent = [[]];
 }
 util.inherits(Socket, Stream);
 
@@ -145,6 +251,21 @@ EndPoint.prototype.shakeHands = function (socket) {
   , synCookie: 0
   , address: parseDotDecimal(socket._peer.address)
   });
+}
+EndPoint.prototype.control = function (socket, pattern, message, callback) {
+  var serializer = common.serializer, dgram = this.dgram, packet = new Buffer(64), peer = socket._peer;
+
+  message.control = 1;
+  message.destination = peer.socketId;
+  // TODO: Implement timestamp.
+  message.timestamp = 0;
+
+  // Format a shutdown packet, simply a header packet of type shutdown.
+  serializer.reset();
+  serializer.serialize(pattern, message);
+  serializer.write(packet);
+
+  dgram.send(packet, 0, serializer.length, peer.port, peer.address, callback);
 }
 EndPoint.prototype.shutdown = function (socket, send) {
   // Remove the socket from the stash.
@@ -216,7 +337,10 @@ EndPoint.prototype.send = function (packetType, object, peer) {
 }
 EndPoint.prototype.receive = function (msg, rinfo) {
   var endPoint = this, parser = common.parser, handler;
+  parser.reset();
   parser.extract('header', function (header) {
+    header.rinfo = rinfo;
+    header.length = msg.length;
     if (header.control) {
       if (header.destination) {
         // TODO: Socket not found...
@@ -234,7 +358,8 @@ EndPoint.prototype.receive = function (msg, rinfo) {
           break;
         default:
           var name = CONTROL_TYPES[header.type];
-          parser.extract(name, endPoint[name].bind(endPoint, socket, header))
+          console.log(name, header);
+          parser.extract(name, endPoint[name].bind(endPoint, parser, socket, header))
         }
       // Hmm... Do you explicitly enable rendezvous?
       } else if (header.type == 0 && endPoint.server) {
@@ -245,7 +370,7 @@ EndPoint.prototype.receive = function (msg, rinfo) {
   });
   parser.parse(msg);
 }
-EndPoint.prototype.handshake = function (socket, header, handshake) {
+EndPoint.prototype.handshake = function (parser, socket, header, handshake) {
   switch (socket._status) {
   case 'syn':
     // Only respond to an initial handshake.
@@ -276,12 +401,62 @@ EndPoint.prototype.handshake = function (socket, header, handshake) {
     clearInterval(socket._handshakeInterval);
 
     socket._status = 'connected';
+    socket._handshake = handshake;
     socket._peer.socketId = handshake.socketId;
 
     socket.emit('connect');
     break;
   }
 }
+
+// Binary search, implemented, as always, by taking a [peek at
+// Sedgewick](http://algs4.cs.princeton.edu/11model/BinarySearch.java.html).
+function binarySearch (comparator, array, key) {
+  var low = 0, high = array.length - 1, partition, compare;
+  while (low <= high) {
+    partition = Math.floor(low + (high - low) / 2);
+    compare = comparator(key, array[partition]);
+    if (compare < 0) high = partition - 1;
+    else if (compare > 0) low = partition + 1;
+    else return partition;
+  }
+  return low;
+}
+
+// Compare two objects by their sequence property.
+function bySequence (left, right) { return left.sequence - right.sequence }
+
+EndPoint.prototype.acknowledgement = function (parser, socket, header, ack) {
+  // All parsing in one fell swoop so we don't do something that causes a next
+  // tick which might cause the parser to be reused.
+  if (header.length == 40) {
+    parser.extract('statistics', this.fullAcknowledgement.bind(this, socket, header, ack));
+  } else {
+    this.lightAcknowledgement(socket, header, ack);
+  }
+};
+
+// Remove the sent packets that have been received.
+EndPoint.prototype.fullAcknowledgement = function (socket, header, ack, stats) {
+  this.lightAcknowledgement(socket, header, ack);
+  say(socket._flowWindowSize, socket._sent[0].length, header, ack, stats);
+}
+
+EndPoint.prototype.lightAcknowledgement = function (socket, header, ack) {
+  var endPoint = this, sent = socket._sent, sequence = sent[0], index;
+  index = binarySearch(bySequence, sequence, ack);
+  if (index != -1 && sent.length == 2) {
+    socket._flowWindowSize -= sent[1].length;
+    sent.length = 1;
+  }
+  if (sent.length == 2) {
+    sequence = sent[1];
+    index = binarySearch(bySequence, sequence, ack);
+  }
+  socket._flowWindowSize -= sequence.splice(0, index).length;
+  endPoint.control(socket, 'header', { type: 0x6, additional: header.additional });
+}
+
 EndPoint.prototype.connect = function (rinfo, header, handshake) {
   var endPoint = this, server = endPoint.server, timestamp = Math.floor(Date.now() / 6e4);
 
@@ -321,6 +496,59 @@ EndPoint.prototype.connect = function (rinfo, header, handshake) {
     if (synCookie(rinfo, timestamp) == handshake.synCookie) return true;
     if (synCookie(rinfo, timestamp - 1) == handshake.synCookie) return true;
     return false; 
+  }
+}
+EndPoint.prototype.transmit = function (socket) {
+  var serializer = common.serializer, dgram = this.dgram,
+      pending = socket._pending, peer = socket._peer, enqueue;
+
+  // If we have data packets to retransmit, they go first, otherwise send a new
+  // data packet.
+  if (false) {
+
+  } else {
+    if (pending.length && !pending[0].length) {
+      pending.shift();
+    }
+
+    if (pending.length) {
+      // TODO: Is pop faster?
+      message = pending[0].shift();
+
+      // Set the sequence number.
+      message.sequence = socket._sequence;
+
+      // We will stash the message and increment the seqeunce number.
+      enqueue = true;
+    }
+  }
+
+  if (message) {
+    serializer.reset();
+    serializer.serialize('header', extend({ control: 0, timestamp: 0 }, message));
+    serializer.write(message.buffer);
+
+    dgram.send(message.buffer, 0, message.buffer.length, peer.port, peer.address);
+  }
+
+  if (enqueue) {
+    socket._flowWindowSize++;
+    // Advance to the socket's next sequence number. The manipulation of the
+    // sent list occurs in both the `Socket` and the `EndPoint`.
+    socket._sequence = socket._sequence + 1 & MAX_SEQ_NO;
+    // When our sequence number wraps, we use a new array of sent packets. This
+    // helps us handle acknowledgements of packets whose squence number is in
+    // the vicinity of a wrap.
+    if (socket._sequence == 0) {
+      socket._sent.unshift([]);
+    }
+    socket._sent[0].push(message);
+  }
+
+  // TODO: Something like this, but after actually calculating the time of the
+  // next packet using the congestion control algorithm.
+  if (pending.length > 1 || pending[0].length) {
+    sendQueue.schedule(socket, 0);
   }
 }
 
@@ -383,6 +611,15 @@ function check (ee, forward) {
         ee.emit('error', error);
       }
     }
+  }
+}
+
+Socket.prototype._nextSequence = function () {
+  var socket = this;
+  if (socket._sequence == MAX_SEQ_NO) {
+    return socket._sequence = 0;
+  } else {
+    return ++socket._sequence;
   }
 }
 
@@ -457,6 +694,61 @@ Socket.prototype.connect = function (options) {
     // The end point sends a packet on our behalf.
     socket._endPoint.shakeHands(socket);
   }
+}
+// There is no way to send the UDP packets without copying the user buffer into
+// new buffers. The UDP packets need a header before a chunk of the user data,
+// so we need to write the header, which means we need a buffer we can alter. We
+// cannot borrow the user's buffer.
+// 
+// According to documentation, write returns false if the buffer cannot be
+// written to kernel, if it is queued in user memory, so we can hold onto it for
+// a while if we like. We pushback when the UDT send buffer, as defined by the
+// count of packets, is full. 
+//
+// All this copying and allocation is disheartening. This is a place that needs
+// the attention of some benchmarks. If you can think of a way to avoid the
+// copying, please let me know. Nothing's occurring to me.
+
+
+// Total size of UDT data packet overhead, UDP header plus UDT data header.
+const UDP_HEADER_SIZE = 28;
+const UDT_DATA_HEADER_SIZE = 16;
+
+//
+Socket.prototype.write = function (buffer) {
+  var socket = this,
+      handshake = socket._handshake,
+      size = handshake.maxPacketSize - (UDT_DATA_HEADER_SIZE + UDT_DATA_HEADER_SIZE),
+      packet, count, i, length, message = [];
+
+  count = Math.floor(buffer.length / size);
+  if (buffer.length % size) count++;
+
+  for (i = 0; i < count; i++) {
+    packet = {
+      control: 0,
+      position: 0,
+      inOrder: 1,
+      number: socket._messageNumber,
+      destination: handshake.socketId,
+      buffer: new Buffer(UDT_DATA_HEADER_SIZE + Math.min(buffer.length - i * size, size))
+    };
+    // TODO: Does `Buffer.copy` choose the lesser of source length and
+    // destination length?
+    buffer.copy(packet.buffer, UDT_DATA_HEADER_SIZE, i * size);
+    if (i == 0) packet.position |= 0x2;
+    if (i == count - 1) packet.position |= 0x1;
+    message.push(packet);
+  }
+
+  socket._messageNumber++;
+  if (socket._messageNumber > MAX_MSG_NO) socket._messageNumber = 1;
+
+  socket._pending.push(message);
+
+  sendQueue.schedule(socket, [ 0, 0 ]);
+
+  return true; 
 }
 Socket.prototype.destroy = function () {
   this._endPoint.shutdown(this);
