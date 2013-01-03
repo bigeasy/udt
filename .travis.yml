@@ -13,4 +13,5 @@ branches:
 # build output.
 
 before_install:
+  - make
   - npm install
