@@ -9,6 +9,7 @@
 #include <iostream>
 #include <sstream>
 #include <cstring>
+#include <unistd.h>
 #include <udt.h>
 
 using namespace std;
