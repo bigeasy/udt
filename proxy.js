@@ -65,7 +65,7 @@ function proxy (input, output, remote, interceptor) {
         if (participant == 'Client' && buffer.length - parser.length == 4) {
           callback(buffer);
         } else {
-  //      console.log(toArray(buffer));
+          console.log(toArray(buffer));
           callback(buffer);
         }
       }

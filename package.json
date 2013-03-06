@@ -12,9 +12,9 @@
   { "type": "git"
   , "url": "http://github.com/bigeasy/udt.git"
   }
-, "scripts" : { "test": "proof t/*/*.t.js" }
+, "scripts" : { "test": "(proof run t/*/*.t.js | tee .proof.out | proof progress) || (proof errors < .proof.out)" }
 , "devDependencies":
-  { "proof": "0.0.15"
+  { "proof": "0.0.20"
   }
 , "dependencies":
   { "packet": "git://github.com/bigeasy/packet.git#e04287354e20dceb1dd0436eb858732363936367"

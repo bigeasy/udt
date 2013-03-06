@@ -1,10 +1,10 @@
-var dgram = require('dgram')
-  , socket = dgram.createSocket('udp4')
-  , packet = require('packet')
-  , common = require('./common')
-  , crypto = require('crypto')
-  , dns = require('dns')
-  , __slice = [].slice;
+var dgram = require('dgram'),
+    socket = dgram.createSocket('udp4'),
+    packet = require('packet'),
+    common = require('./common'),
+    crypto = require('crypto'),
+    dns = require('dns'),
+    __slice = [].slice;
 
 const CONTROL_TYPES = 'handshake keep-alive acknowledgement'.split(/\s+/);
 const MAX_MSG_NO = 0x1FFFFFFF;
@@ -171,8 +171,8 @@ var sendQueue = new (function () {
     // preserve encapsulation. I've yet to completely de-program myself of this
     // sort of rote programming. The send queue is within the same capsule as
     // the socket. They are interdependent. They existing for each other. The
-    // socket object's underscorred proroperties are part of its implementation,
-    // in fact, the socket is not the implementation, the whole API is.
+    // socket object's underscored properties are part of its implementation, in
+    // fact, the socket is not the implementation, the whole API is.
     socket._sendTime = timestamp;
     queue.push(socket);
     if (!sending) poll();
@@ -579,7 +579,7 @@ function lookupEndPoint (local) {
 
   // If no datagram exists, ensure that we'll be able to create one. This only
   // inspects ports that have been bound by UDT, not by other protocols, so
-  // there is still an opportuntity for error when the UDP bind is invoked.
+  // there is still an opportunity for error when the UDP bind is invoked.
   if (!endPoint) {
     if (endPoints[local.port][0]) {
       throw new Error('Already bound to all interfaces.');
@@ -853,5 +853,7 @@ exports.createServer = function () {
 }
 
 function toArray (buffer) {
-  return buffer.toString('hex').replace(/(..)/g, ':$1').replace(/(.{12})/g, '\n$1').replace(/\n:/g, '\n');
+  return buffer.toString('hex').replace(/(..)/g, ':$1')
+                               .replace(/(.{12})/g, '\n$1')
+                               .replace(/\n:/g, '\n');
 }
