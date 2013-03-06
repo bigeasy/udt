@@ -9,10 +9,10 @@ var client = dgram.createSocket('udp4'),
 
 function die () {
   console.log.apply(console, __slice.call(arguments, 0));
-  return process.exit(1);
+  process.exit(1);
 }
 
-function say () { return console.log.apply(console, __slice.call(arguments, 0)) }
+function say () { console.log.apply(console, __slice.call(arguments, 0)) }
 
 function extend (to, from) {
   for (var key in from) to[key] = from[key];
@@ -36,7 +36,9 @@ function proxy (input, output, remote, interceptor) {
 
   client.on('message', function (buffer, $info) {
     info = $info;
-    log('Client', buffer, function (buffer) { server.send(buffer, 0, buffer.length, remote, '127.0.0.1'); });
+    log('Client', buffer, function (buffer) {
+      server.send(buffer, 0, buffer.length, remote, '127.0.0.1');
+    });
   });
 
   var epoch = process.hrtime();
@@ -72,7 +74,9 @@ function proxy (input, output, remote, interceptor) {
   }
 
   function toArray (buffer) {
-    return buffer.toString('hex').replace(/(..)/g, ':$1').replace(/(.{12})/g, '\n$1').replace(/\n:/g, '\n');
+    return buffer.toString('hex').replace(/(..)/g, ':$1')
+                                 .replace(/(.{12})/g, '\n$1')
+                                 .replace(/\n:/g, '\n');
   }
 
   server.on('message', function (buffer) {
