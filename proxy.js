@@ -31,6 +31,7 @@ function proxy (input, output, remote, interceptor) {
   parser.packet('header', packets.header);
   parser.packet('handshake', packets.handshake);
 
+  console.log(input, '127.0.0.1');
   client.bind(input, '127.0.0.1');
   server.bind(output, '127.0.0.1');
 
