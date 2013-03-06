@@ -6,7 +6,7 @@ require('./proof')(3, function (step, say, ok, equal, execute, proxy) {
   var other = step();
   server.on('error', function (error) { throw error });
   server.stderr.pipe(process.stderr);
-  server.stdout.on('data', function (chunk) {
+  server.stdout.once('data', function (chunk) {
     proxy(9923, 9593, 9000, function (buffer) { return buffer });
     client = execute('integer/client', [ '127.0.0.1', 9923 ]);
     client.stderr.pipe(process.stderr);
