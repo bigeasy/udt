@@ -14,7 +14,7 @@
   }
 , "scripts" : { "test": "proof t/*/*.t.js" }
 , "devDependencies":
-  { "proof": "0.0.15"
+  { "proof": "0.0.20"
   }
 , "dependencies":
   { "packet": "git://github.com/bigeasy/packet.git#e04287354e20dceb1dd0436eb858732363936367"

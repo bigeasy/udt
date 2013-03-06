@@ -36,7 +36,9 @@ function proxy (input, output, remote, interceptor) {
 
   client.on('message', function (buffer, $info) {
     info = $info;
-    log('Client', buffer, function (buffer) { server.send(buffer, 0, buffer.length, remote, '127.0.0.1'); });
+    log('Client', buffer, function (buffer) {
+      server.send(buffer, 0, buffer.length, remote, '127.0.0.1');
+    });
   });
 
   var epoch = process.hrtime();
@@ -63,7 +65,7 @@ function proxy (input, output, remote, interceptor) {
         if (participant == 'Client' && buffer.length - parser.length == 4) {
           callback(buffer);
         } else {
-  //      console.log(toArray(buffer));
+          console.log(toArray(buffer));
           callback(buffer);
         }
       }
@@ -72,7 +74,9 @@ function proxy (input, output, remote, interceptor) {
   }
 
   function toArray (buffer) {
-    return buffer.toString('hex').replace(/(..)/g, ':$1').replace(/(.{12})/g, '\n$1').replace(/\n:/g, '\n');
+    return buffer.toString('hex').replace(/(..)/g, ':$1')
+                                 .replace(/(.{12})/g, '\n$1')
+                                 .replace(/\n:/g, '\n');
   }
 
   server.on('message', function (buffer) {
