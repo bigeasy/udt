@@ -7,10 +7,10 @@ var dgram   = require('dgram'),
 
 function die () {
   console.log.apply(console, __slice.call(arguments, 0));
-  return process.exit(1);
+  process.exit(1);
 }
 
-function say () { return console.log.apply(console, __slice.call(arguments, 0)) }
+function say () { console.log.apply(console, __slice.call(arguments, 0)) }
 
 function extend (to, from) {
   for (var key in from) to[key] = from[key];
