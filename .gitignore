@@ -1,5 +1,6 @@
-node_modules/*
-build/*
-sdk/*/*.o
-sdk/*/client
-sdk/*/server
+/node_modules
+/build
+/sdk/*/*.o
+/sdk/*/client
+/sdk/*/server
+/.proof.out

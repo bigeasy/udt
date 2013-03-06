@@ -12,7 +12,7 @@
   { "type": "git"
   , "url": "http://github.com/bigeasy/udt.git"
   }
-, "scripts" : { "test": "(proof run t/*/*.t | tee .proof.out | proof progress) || (proof errors < .proof.out)" }
+, "scripts" : { "test": "(proof run t/*/*.t.js | tee .proof.out | proof progress) || (proof errors < .proof.out)" }
 , "devDependencies":
   { "proof": "0.0.20"
   }
