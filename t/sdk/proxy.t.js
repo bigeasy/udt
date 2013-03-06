@@ -18,7 +18,7 @@ require('./proof')(3, function (step, say, ok, equal, execute, proxy) {
     });
   });
   server.on('close', function (code, signal) {
-    if (code) equal(code, 0, 'server closed');
+    if (code != null) equal(code, 0, 'server closed');
     else equal(signal, 'SIGTERM', 'server closed');
     callback(null);
   });
